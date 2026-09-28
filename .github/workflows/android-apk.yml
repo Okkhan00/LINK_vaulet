@@ -1,0 +1,46 @@
+name: Build Android APK
+
+on:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm install          # ⚠️ should be `npm ci`
+
+      - name: Build web app
+        run: npm run build
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21        # ⚠️ no gradle cache
+
+      - uses: android-actions/setup-android@v3   # ⚠️ no pinned packages
+
+      - name: Add Android platform if missing
+        run: '[ -d android ] || npx cap add android'   # ✅ idempotent
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug --no-daemon    # ✅ good for CI
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: link-vault-android-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          # ⚠️ no if-no-files-found, no retention-days

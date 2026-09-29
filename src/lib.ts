@@ -1,7 +1,9 @@
 export interface Link {
   id: string; title: string; url: string; category: string;
-  notes: string; favorite: boolean; createdAt: string; updatedAt: string;
+  notes: string; favorite: boolean; createdAt: string; updatedAt: string; deletedAt?: string;
 }
+export interface Recent { id: string; at: string }
+export interface PinRec { salt: string; hash: string }
 export interface Backup {
   app: 'link-vault'; version: 1; exportedAt: string; links: Link[]; categories: string[];
 }
@@ -65,4 +67,36 @@ export function parseBackup(text: string): Backup {
 export function mergeLinks(existing: Link[], incoming: Link[]): Link[] {
   const ids = new Set(existing.map((l) => l.id));
   return [...existing, ...incoming.map((l) => (ids.has(l.id) ? { ...l, id: uid() } : l))];
+}
+
+// ---- URL helpers ----
+export function sameUrl(a: string, b: string): boolean {
+  const n = (s: string) => {
+    try { const u = new URL(s); return `${u.protocol}//${u.hostname.replace(/^www\./, '')}${u.pathname.replace(/\/+$/, '')}${u.search}`; }
+    catch { return s; }
+  };
+  return n(a) === n(b);
+}
+export function extractShare(text: string): { url: string; title: string; category: string } | null {
+  const m = text.match(/https?:\/\/[^\s]+/i);
+  const url = m ? normalizeUrl(m[0].replace(/[).,;]+$/, '')) : null;
+  if (!m || !url) return null;
+  const t = text.replace(m[0], '').replace(/\s+/g, ' ').trim();
+  const social = /(^|\.)(tiktok|instagram|facebook|twitter|x|reddit|snapchat|threads)\.(com|net)$/.test(new URL(url).hostname);
+  return { url, title: t && t.length <= 120 ? t : domain(url), category: social ? 'Social' : 'Other' };
+}
+
+// ---- PIN (salted PBKDF2 hash; the PIN itself is never stored) ----
+const hex = (b: Uint8Array) => Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+async function derive(pin: string, salt: Uint8Array): Promise<string> {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pin), 'PBKDF2', false, ['deriveBits']);
+  return hex(new Uint8Array(await crypto.subtle.deriveBits({ name: 'PBKDF2', salt, iterations: 100000, hash: 'SHA-256' }, key, 256)));
+}
+export async function makePin(pin: string): Promise<PinRec> {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  return { salt: hex(salt), hash: await derive(pin, salt) };
+}
+export async function checkPin(pin: string, rec: PinRec): Promise<boolean> {
+  const salt = Uint8Array.from((rec.salt.match(/../g) ?? []).map((h) => parseInt(h, 16)));
+  return (await derive(pin, salt)) === rec.hash;
 }

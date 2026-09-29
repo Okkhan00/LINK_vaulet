@@ -1,4 +1,4 @@
-```yaml
+
 name: Build Android APK
 
 on:
@@ -81,4 +81,3 @@ jobs:
           prerelease: false
           draft: false
           overwrite_files: true
-```

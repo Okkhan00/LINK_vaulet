@@ -3,7 +3,6 @@ name: Build Android APK
 on:
   push:
     branches: [main, master]
-    tags: ['v*']
   workflow_dispatch:
 
 concurrency:
@@ -22,6 +21,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+          cache: npm
 
       - name: Install dependencies
         run: npm install
@@ -44,6 +44,9 @@ jobs:
 
       - name: Add Android platform if missing
         run: '[ -d android ] || npx cap add android'
+
+      - name: Add Share Target and native bridge
+        run: python3 scripts/patch-android.py
 
       - name: Sync Capacitor
         run: npx cap sync android

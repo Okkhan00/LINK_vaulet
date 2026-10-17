@@ -1,6 +1,6 @@
 export interface Link {
   id: string; title: string; url: string; category: string;
-  notes: string; favorite: boolean; createdAt: string; updatedAt: string; deletedAt?: string;
+  notes: string; favorite: boolean; createdAt: string; updatedAt: string; deletedAt?: string; platform?: string;
 }
 export interface Recent { id: string; at: string }
 export interface PinRec { salt: string; hash: string }
@@ -100,3 +100,30 @@ export async function checkPin(pin: string, rec: PinRec): Promise<boolean> {
   const salt = Uint8Array.from((rec.salt.match(/../g) ?? []).map((h) => parseInt(h, 16)));
   return (await derive(pin, salt)) === rec.hash;
 }
+
+// ---- Platforms (detected locally from the URL; no network) ----
+export const PLATFORMS: { name: string; color: string; mark: string; hosts: string[] }[] = [
+  { name: 'Facebook', color: '#1877f2', mark: 'f', hosts: ['facebook.com', 'fb.watch', 'fb.com', 'fb.me'] },
+  { name: 'TikTok', color: '#111111', mark: '♪', hosts: ['tiktok.com'] },
+  { name: 'YouTube', color: '#e02424', mark: '▶', hosts: ['youtube.com', 'youtu.be'] },
+  { name: 'Instagram', color: '#c13584', mark: '◎', hosts: ['instagram.com'] },
+  { name: 'X', color: '#222222', mark: 'X', hosts: ['x.com', 'twitter.com', 't.co'] },
+  { name: 'Reddit', color: '#ff4500', mark: 'r', hosts: ['reddit.com', 'redd.it'] },
+  { name: 'Pinterest', color: '#e60023', mark: 'P', hosts: ['pinterest.com', 'pin.it'] },
+  { name: 'LinkedIn', color: '#0a66c2', mark: 'in', hosts: ['linkedin.com', 'lnkd.in'] },
+  { name: 'Telegram', color: '#229ed9', mark: '✈', hosts: ['t.me', 'telegram.me', 'telegram.org'] },
+  { name: 'WhatsApp', color: '#25d366', mark: 'W', hosts: ['whatsapp.com', 'wa.me'] },
+  { name: 'GitHub', color: '#333333', mark: 'GH', hosts: ['github.com'] },
+  { name: 'Google', color: '#4285f4', mark: 'G', hosts: ['google.com', 'goo.gl', 'g.co'] },
+  { name: 'Other', color: '#6b7190', mark: '🔗', hosts: [] },
+];
+export function detectPlatform(url: string): string {
+  let h: string;
+  try { h = new URL(url).hostname.toLowerCase(); } catch { return 'Other'; }
+  return PLATFORMS.find((p) => p.hosts.some((d) => h === d || h.endsWith('.' + d)))?.name ?? 'Other';
+}
+/** Manual override wins; otherwise derived from the URL, so old links and old backups need no migration. */
+export const platformOf = (l: Link): string =>
+  l.platform && PLATFORMS.some((p) => p.name === l.platform) ? l.platform : detectPlatform(l.url);
+export const matchesQuery = (l: Link, s: string): boolean =>
+  !s || [l.title, l.url, l.category, l.notes, platformOf(l)].some((x) => x.toLowerCase().includes(s));

@@ -26,3 +26,8 @@ nav button{flex:1;border:0;border-radius:0;background:none;color:var(--muted)}na
 .lock{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:8px}
 .lock input{max-width:240px;text-align:center;letter-spacing:8px}
 .err{color:var(--danger);font-size:13px;margin:-8px 0 10px}
+
+.badge{width:40px;height:40px;border-radius:12px;display:inline-flex;align-items:center;justify-content:center;color:#fff;font-weight:700;flex:none}
+.group{display:flex;align-items:center;gap:12px;width:100%;text-align:left;min-height:64px}
+.group .chev{margin-left:auto;color:var(--muted);font-size:22px}
+.card h3,.meta{overflow-wrap:anywhere}

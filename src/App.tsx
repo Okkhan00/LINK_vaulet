@@ -4,7 +4,7 @@ import { Capacitor, registerPlugin, type PluginListenerHandle } from '@capacitor
 import { Directory, Encoding, Filesystem } from '@capacitor/filesystem';
 import { Share } from '@capacitor/share';
 import {
-  DEFAULT_CATS, checkPin, dbGet, dbSet, domain, extractShare, makePin, mergeLinks, normalizeUrl, parseBackup, sameUrl, uid,
+  DEFAULT_CATS, PLATFORMS, checkPin, dbGet, dbSet, detectPlatform, domain, extractShare, makePin, matchesQuery, mergeLinks, normalizeUrl, parseBackup, platformOf, sameUrl, uid,
   type Backup, type Link, type PinRec, type Recent, type Theme,
 } from './lib';
 
@@ -15,7 +15,9 @@ type Dlg =
   | { k: 'cat'; old?: string } | { k: 'clear' } | { k: 'import'; data: Backup } | null;
 
 type Prefill = { url: string; title: string; category: string };
-type FormVals = { title: string; url: string; category: string; notes: string };
+type FormVals = { title: string; url: string; category: string; notes: string; platform?: string };
+type Sort = 'new' | 'old' | 'az' | 'fav';
+const SORTS: [Sort, string][] = [['new', 'Newest'], ['old', 'Oldest'], ['az', 'A-Z'], ['fav', 'Favorites']];
 interface ShareIntentApi {
   getShared(): Promise<{ text?: string }>;
   addListener(e: 'shared', cb: (d: { text: string }) => void): Promise<PluginListenerHandle>;
@@ -39,11 +41,31 @@ export default function App() {
   const [recent, setRecent] = useState<Recent[]>([]);
   const [pendingShare, setPendingShare] = useState<string | null>(null);
   const lastBg = useRef(0);
+  const [plat, setPlat] = useState<string | null>(null);
+  const [view, setView] = useState<'groups' | 'all'>('groups');
+  const [sort, setSort] = useState<Sort>('new');
 
   const say = (m: string) => { setToast(m); setTimeout(() => setToast(''), 2500); };
   const cats = [...DEFAULT_CATS, ...custom];
   const active = useMemo(() => links.filter((l) => !l.deletedAt), [links]);
   const trash = links.filter((l) => l.deletedAt);
+  const groups = useMemo(() => {
+    const m = new Map<string, Link[]>();
+    for (const l of active) { const p = platformOf(l); const a = m.get(p); if (a) a.push(l); else m.set(p, [l]); }
+    return [...m].map(([name, items]) => ({ name, items, last: items.reduce((a, l) => (l.createdAt > a ? l.createdAt : a), '') }))
+      .sort((a, b) => b.items.length - a.items.length || b.last.localeCompare(a.last));
+  }, [active]);
+  const platList = useMemo(() => {
+    if (!plat) return [];
+    const s = q.trim().toLowerCase();
+    const byNew = (a: Link, b: Link) => b.updatedAt.localeCompare(a.updatedAt);
+    const cmp: Record<Sort, (a: Link, b: Link) => number> = {
+      new: byNew, old: (a, b) => byNew(b, a), az: (a, b) => a.title.localeCompare(b.title),
+      fav: (a, b) => Number(b.favorite) - Number(a.favorite) || byNew(a, b),
+    };
+    return active.filter((l) => platformOf(l) === plat && matchesQuery(l, s)).sort(cmp[sort]);
+  }, [active, plat, q, sort]);
+  useEffect(() => { if (plat && !active.some((l) => platformOf(l) === plat)) setPlat(null); }, [active, plat]);
   const recentLinks = recent.map((r) => active.find((l) => l.id === r.id)).filter((l): l is Link => !!l);
 
   useEffect(() => {
@@ -65,10 +87,10 @@ export default function App() {
 
   useEffect(() => {
     const h = CapApp.addListener('backButton', () => {
-      if (locked) CapApp.exitApp(); else if (dlg) setDlg(null); else if (tab !== 'home') setTab('home'); else CapApp.exitApp();
+      if (locked) CapApp.exitApp(); else if (dlg) setDlg(null); else if (plat && tab === 'home') { setPlat(null); setQ(''); } else if (tab !== 'home') setTab('home'); else CapApp.exitApp();
     });
     return () => { h.then((x) => x.remove()); };
-  }, [dlg, tab, locked]);
+  }, [dlg, tab, locked, plat]);
 
   // Auto-lock: remember when the app left the foreground; lock on return after 1 minute.
   useEffect(() => {
@@ -117,7 +139,7 @@ export default function App() {
     return active
       .filter((l) => (tab === 'fav' ? l.favorite : true))
       .filter((l) => filter === 'All' || l.category === filter)
-      .filter((l) => !s || [l.title, l.url, l.category, l.notes].some((x) => x.toLowerCase().includes(s)))
+      .filter((l) => matchesQuery(l, s))
       .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   }, [active, q, filter, tab]);
 
@@ -173,6 +195,15 @@ export default function App() {
     </div>
   );
 
+  const grouped = tab === 'home' && view === 'groups' && !q.trim() && !plat;
+  const groupCards = groups.map((g) => (g.items.length === 1 ? cardOf(g.items[0]) : (
+    <button key={g.name} className="card group" onClick={() => { setPlat(g.name); setQ(''); }}>
+      <Badge name={g.name} />
+      <span><b>{g.name}</b><span className="meta" style={{ display: 'block' }}>{g.items.length} Links · Last added {new Date(g.last).toLocaleDateString()}</span></span>
+      <span className="chev" aria-hidden>›</span>
+    </button>
+  )));
+
   if (!ready) return <div className="app"><header><h1>Link Vault</h1></header></div>;
   if (locked && pin) return <Lock pin={pin} onUnlock={() => setLocked(false)} />;
 
@@ -183,7 +214,22 @@ export default function App() {
         {tab === 'home' && <p className="sub">Your links, organized.</p>}
       </header>
 
-      {(tab === 'home' || tab === 'fav') && (
+      {plat && tab === 'home' && (
+        <>
+          <div className="row" style={{ alignItems: 'center' }}>
+            <button aria-label="Back to dashboard" onClick={() => { setPlat(null); setQ(''); }}>‹</button>
+            <Badge name={plat} /><h2 style={{ margin: 0 }}>{plat}</h2>
+          </div>
+          <p className="meta">{(() => { const n = groups.find((g) => g.name === plat)?.items.length ?? 0; return `${n} ${n === 1 ? 'Link' : 'Links'}`; })()}</p>
+          <input type="search" aria-label={`Search ${plat} links`} placeholder={`Search ${plat} links...`} value={q} onChange={(e) => setQ(e.target.value)} />
+          <div className="chips">
+            {SORTS.map(([k, label]) => <button key={k} className={`chip ${sort === k ? 'on' : ''}`} onClick={() => setSort(k)}>{label}</button>)}
+          </div>
+          {platList.length ? platList.map(cardOf) : <div className="empty"><h2>No links found</h2></div>}
+        </>
+      )}
+
+      {((tab === 'home' && !plat) || tab === 'fav') && (
         <>
           {tab === 'home' && (
             <div className="stats">
@@ -203,12 +249,18 @@ export default function App() {
             </>
           )}
           <input type="search" aria-label="Search links" placeholder="Search links..." value={q} onChange={(e) => setQ(e.target.value)} />
-          <div className="chips">
+          {tab === 'home' && (
+            <div className="chips">
+              <button className={`chip ${view === 'groups' ? 'on' : ''}`} onClick={() => setView('groups')}>Platforms</button>
+              <button className={`chip ${view === 'all' ? 'on' : ''}`} onClick={() => setView('all')}>All Links</button>
+            </div>
+          )}
+          <div className="chips" style={{ display: grouped ? 'none' : undefined }}>
             {['All', ...cats].map((c) => (
               <button key={c} className={`chip ${filter === c ? 'on' : ''}`} onClick={() => setFilter(c)}>{c}</button>
             ))}
           </div>
-          {list.length ? list.map(cardOf) : (
+          {grouped && groups.length ? groupCards : list.length ? list.map(cardOf) : (
             <div className="empty">
               {q ? <h2>No links found</h2> : tab === 'fav' ? <h2>No favorite links yet</h2> : (
                 <>
@@ -269,7 +321,7 @@ export default function App() {
             <button className="danger" onClick={() => setDlg({ k: 'clear' })}>Clear All Data</button>
           </div>
           <h2>About</h2>
-          <p className="meta">Link Vault · Version 2.0.0 · Powered by Aizaz</p>
+          <p className="meta">Link Vault · Version 2.1.0 · Powered by Aizaz</p>
         </>
       )}
 
@@ -411,12 +463,13 @@ function Form({ link, pre, cats, onSave, onCancel }: {
   const [url, setUrl] = useState(link?.url ?? pre?.url ?? '');
   const [category, setCategory] = useState(link?.category ?? pre?.category ?? 'Other');
   const [notes, setNotes] = useState(link?.notes ?? '');
+  const [platform, setPlatform] = useState(link?.platform ?? '');
   const [err, setErr] = useState('');
   const submit = () => {
     const u = normalizeUrl(url);
     if (!title.trim()) return setErr('Please enter a title.');
     if (!u) return setErr('Enter a valid link starting with http:// or https://');
-    onSave({ title: title.trim(), url: u, category, notes: notes.trim() });
+    onSave({ title: title.trim(), url: u, category, notes: notes.trim(), platform: platform || undefined });
   };
   return (
     <>
@@ -431,6 +484,11 @@ function Form({ link, pre, cats, onSave, onCancel }: {
       <label htmlFor="u">URL</label><input id="u" inputMode="url" value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://github.com/example" />
       <label htmlFor="c">Category</label>
       <select id="c" value={category} onChange={(e) => setCategory(e.target.value)}>{cats.map((c) => <option key={c}>{c}</option>)}</select>
+      <label htmlFor="p">Platform</label>
+      <select id="p" value={platform} onChange={(e) => setPlatform(e.target.value)}>
+        <option value="">{normalizeUrl(url) ? `Auto-detect (${detectPlatform(url)})` : 'Auto-detect'}</option>
+        {PLATFORMS.map((p) => <option key={p.name}>{p.name}</option>)}
+      </select>
       <label htmlFor="n">Notes</label><textarea id="n" rows={3} value={notes} onChange={(e) => setNotes(e.target.value)} />
       {err && <div className="err" role="alert">{err}</div>}
       <div className="row"><button onClick={onCancel}>Cancel</button><button className="primary" onClick={submit}>Save Link</button></div>
@@ -509,4 +567,9 @@ function PinDialog({ mode, pin, onCancel, onSubmit }: {
       <div className="row"><button onClick={onCancel}>Cancel</button><button className="primary" onClick={submit}>{mode === 'disable' ? 'Turn Off' : 'Save'}</button></div>
     </>
   );
+}
+
+function Badge({ name }: { name: string }) {
+  const p = PLATFORMS.find((x) => x.name === name);
+  return <span className="badge" style={{ background: p?.color ?? '#6b7190' }} aria-hidden>{p?.mark ?? '🔗'}</span>;
 }
